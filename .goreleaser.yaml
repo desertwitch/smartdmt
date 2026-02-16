@@ -1,0 +1,47 @@
+version: 2
+
+project_name: smartdmt
+
+before:
+  hooks:
+    - make clean
+    - make vendor
+    - make lint
+    - make test
+
+builds:
+  - id: smartdmt
+    main: .
+    binary: smartdmt
+    env:
+      - CGO_ENABLED=0
+      - GOFLAGS=-mod=vendor
+    flags:
+      - -trimpath
+    ldflags:
+      - -w
+      - -s
+      - -X main.Version={{.Version}}
+      - -buildid=
+    goos:
+      - linux
+    goarch:
+    - amd64
+    - 386
+
+source:
+  enabled: true
+
+archives:
+  -
+    format_overrides:
+      -
+        goos: linux
+        formats: [ 'binary' ]
+
+signs:
+  - artifacts: checksum
+
+release:
+  footer: Any release files are unattended builds and served without any warranties.
+

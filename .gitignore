@@ -1,0 +1,4 @@
+vendor/
+/smartdmt
+# Added by goreleaser init:
+dist/
