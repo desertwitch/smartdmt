@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -18,8 +18,6 @@ import (
 
 var (
 	Version = "devel"
-
-	lsblkRe = regexp.MustCompile(`PATH="([^"]*)" MODEL="([^"]*)" SERIAL="([^"]*)"`)
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -36,10 +34,10 @@ var (
 var _ list.Item = (*Disk)(nil)
 
 type Disk struct {
-	Name   string
-	Path   string
-	Model  string
-	Serial string
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Model  string `json:"model"`
+	Serial string `json:"serial"`
 }
 
 func (d Disk) Title() string       { return d.Name }
@@ -47,6 +45,10 @@ func (d Disk) FilterValue() string { return d.Name + " " + d.Serial }
 func (d Disk) Description() string { return truncate(d.Serial, 20) }
 
 type (
+	lsblkOutput struct {
+		Blockdevices []Disk `json:"blockdevices"`
+	}
+
 	model struct {
 		currentDisk string // displayed
 		loadingDisk string // in-flight
@@ -108,29 +110,28 @@ func (m model) Init() tea.Cmd {
 
 func loadDisks(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "lsblk", "-d", "-o", "PATH,MODEL,SERIAL", "-n", "--pairs")
+		cmd := exec.CommandContext(ctx, "lsblk", "-d", "-o", "NAME,PATH,MODEL,SERIAL", "-n", "--json")
 		output, err := cmd.Output()
 		if err != nil {
 			return disksLoadedMsg([]Disk{})
 		}
 
+		var data lsblkOutput
+		if err := json.Unmarshal(output, &data); err != nil {
+			return disksLoadedMsg([]Disk{})
+		}
+
 		var disks []Disk
-		lines := strings.SplitSeq(strings.TrimSpace(string(output)), "\n")
-		for line := range lines {
-			matches := lsblkRe.FindStringSubmatch(line)
-			if matches == nil {
+		for _, d := range data.Blockdevices {
+			if strings.Contains(d.Path, "loop") || strings.Contains(d.Path, "ram") {
 				continue
 			}
-			path := matches[1]
-			if strings.Contains(path, "loop") || strings.Contains(path, "ram") {
-				continue
+
+			if d.Name == "" && d.Path != "" {
+				d.Name = strings.TrimPrefix(d.Path, "/dev/")
 			}
-			disks = append(disks, Disk{
-				Name:   strings.TrimPrefix(path, "/dev/"),
-				Path:   path,
-				Model:  matches[2],
-				Serial: matches[3],
-			})
+
+			disks = append(disks, d)
 		}
 
 		return disksLoadedMsg(disks)
@@ -157,7 +158,7 @@ func loadSmartData(ctx context.Context, diskPath string, tableOnly bool) tea.Cmd
 }
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -206,12 +207,13 @@ func calcDimensions(width, height int) dimensions {
 	}
 }
 
-//nolint:gocognit,gocyclo,cyclop,funlen
+//nolint:cyclop,funlen
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 	var cmds []tea.Cmd
 	var listCmd, vpCmd tea.Cmd
-
 	var selectedDisk *Disk
+	var dispatchReload bool
+
 	if disk := m.selectedDisk(); disk != nil {
 		selectedDisk = disk
 	}
@@ -223,18 +225,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 			return m, tea.Quit
 
 		case "r", "R":
-			if selectedDisk != nil {
-				cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-				m.loadingDisk = selectedDisk.Path
-			}
+			dispatchReload = true
 
 		case "t", "T":
 			m.tableOnly = !m.tableOnly
-			if selectedDisk != nil {
-				m.currentDisk = "" // full reload
-				cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-				m.loadingDisk = selectedDisk.Path
-			}
+			m.currentDisk = "" // full reload
+			dispatchReload = true
 		}
 
 	case tea.WindowSizeMsg:
@@ -248,10 +244,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 
 		if !m.ready {
 			m.ready = true
-			if selectedDisk != nil {
-				cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-				m.loadingDisk = selectedDisk.Path
-			}
+			dispatchReload = true
 		}
 
 	case disksLoadedMsg:
@@ -275,13 +268,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 
 					break
 				}
-			}
-		}
-
-		if len(msg) > 0 && m.ready && m.currentDisk == "" {
-			if selectedDisk != nil {
-				cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-				m.loadingDisk = selectedDisk.Path
 			}
 		}
 
@@ -315,11 +301,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 	case tickMsg:
 		cmds = append(cmds, tickCmd())
 		cmds = append(cmds, loadDisks(m.ctx))
-
-		if selectedDisk != nil {
-			cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-			m.loadingDisk = selectedDisk.Path
-		}
+		dispatchReload = true
 	}
 
 	m.list, listCmd = m.list.Update(msg)
@@ -328,17 +310,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	cmds = append(cmds, vpCmd)
 
-	// Check if selection changed after list updated
+	// Check if the selected disk changed after the list updated
 	var prevPath string
 	if selectedDisk != nil {
 		prevPath = selectedDisk.Path
 	}
-	if selectedDisk := m.selectedDisk(); selectedDisk != nil {
-		// Queue a data reload if the disk is different and we're not already loading it.
+
+	selectedDisk = m.selectedDisk()
+
+	if selectedDisk != nil {
 		if selectedDisk.Path != prevPath && selectedDisk.Path != m.loadingDisk {
-			cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-			m.loadingDisk = selectedDisk.Path
+			// Dispatch reload, disk differs and we're not already loading it.
+			dispatchReload = true
 		}
+	} else if m.currentDisk != "" {
+		// No disk is selected anymore, clear the residual state.
+		m.currentDisk = ""
+		m.smartData = ""
+		m.viewport.SetContent("")
+	}
+
+	if dispatchReload && selectedDisk != nil {
+		cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
+		m.loadingDisk = selectedDisk.Path
 	}
 
 	return m, tea.Batch(cmds...)
@@ -373,7 +367,7 @@ func (m model) View() string {
 		rightContent.WriteString(titleStyle.Render(fmt.Sprintf(" %s [%s]\n Model: %s • Serial: %s",
 			disk.Path, mode, truncate(disk.Model, 40), truncate(disk.Serial, 20))) + "\n\n")
 	} else {
-		rightContent.WriteString(titleStyle.Render(" No block devices found.") + "\n\n")
+		rightContent.WriteString(titleStyle.Render(" No device is selected.") + "\n\n")
 	}
 
 	if m.loadingDisk != "" && m.currentDisk != m.loadingDisk {
@@ -440,7 +434,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := exec.CommandContext(ctx, "lsblk", "-d", "-o", "NAME,MODEL,SERIAL", "-n", "-p").Run(); err != nil {
+	if err := exec.CommandContext(ctx, "lsblk", "-d", "-o", "NAME,PATH,MODEL,SERIAL", "-n", "--json").Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: lsblk not available or failed: %v\n", err)
 		exitCode = 1
 
