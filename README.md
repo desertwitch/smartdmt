@@ -1,14 +1,15 @@
 ## smartdmt - SMART Device Monitoring Terminal
 
-`smartdmt` is a small utility that provides a simple terminal user interface (TUI) for
-inspecting your connected block devices' SMART information. It was developed
-primarily as a companion application to
+`smartdmt` is a small utility that provides a simple terminal user interface
+(TUI) for inspecting your connected block devices' SMART information. It was
+developed primarily as a companion application to
 [ShredOS](https://github.com/PartialVolume/shredos.x86_64), so that such
-information can be observed during disk wiping. However, the utility
-also functions as a standalone program.
+information can be observed during disk wiping. However, the utility also
+functions as a standalone program.
 
 The TUI acts as a visual wrapper, calling `lsblk` and `smartctl` under the hood
-to provide a side-by-side view of all connected block devices and their respective SMART information. The data is automatically refreshed and basic filtering is possible.
+to provide a side-by-side view of all block devices and their SMART information.
+The data is automatically refreshed and basic filtering is possible.
 
 ### Installation
 
