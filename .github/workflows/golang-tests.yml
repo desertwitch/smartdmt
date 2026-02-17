@@ -1,4 +1,4 @@
-name: golang-build-debug
+name: golang-tests
 on:
   push:
     branches:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   golang:
-    name: build-debug
+    name: test
     runs-on: ubuntu-latest
     steps:
       - name: Set up Go
@@ -25,8 +25,5 @@ jobs:
       - name: Clean the environment
         run: make clean
 
-      - name: Vendor the application for debug
-        run: make vendor
-
-      - name: Build the application for debug
-        run: make debug
+      - name: Run all Go tests
+        run: make test

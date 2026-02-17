@@ -1,5 +1,15 @@
 ## smartdmt - SMART Device Monitoring Terminal
 
+<a href="https://github.com/desertwitch/smartdmt/tags"><img alt="Release" src="https://img.shields.io/github/tag/desertwitch/smartdmt.svg"></a>
+<a href="https://go.dev/"><img alt="Go Version" src="https://img.shields.io/badge/Go-%3E%3D%201.24.2-%23007d9c"></a>
+<a href="https://pkg.go.dev/github.com/desertwitch/smartdmt"><img alt="Go Reference" src="https://pkg.go.dev/badge/github.com/desertwitch/smartdmt.svg"></a>
+<a href="https://goreportcard.com/report/github.com/desertwitch/smartdmt"><img alt="Go Report" src="https://goreportcard.com/badge/github.com/desertwitch/smartdmt"></a>
+<a href="./LICENSE"><img alt="License" src="https://img.shields.io/github/license/desertwitch/smartdmt"></a>
+<br>
+<a href="https://github.com/desertwitch/smartdmt/actions/workflows/golangci-lint.yml"><img alt="Lint" src="https://github.com/desertwitch/smartdmt/actions/workflows/golangci-lint.yml/badge.svg"></a>
+<a href="https://github.com/desertwitch/smartdmt/actions/workflows/golang-tests.yml"><img alt="Tests" src="https://github.com/desertwitch/smartdmt/actions/workflows/golang-tests.yml/badge.svg"></a>
+<a href="https://github.com/desertwitch/smartdmt/actions/workflows/golang-build.yml"><img alt="Build" src="https://github.com/desertwitch/smartdmt/actions/workflows/golang-build.yml/badge.svg"></a>
+
 <img src="assets/screenshot.gif"><br>
 
 `smartdmt` is a small utility that provides a simple terminal user interface
