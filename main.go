@@ -429,7 +429,7 @@ func main() {
 	}()
 
 	fmt.Fprintf(os.Stderr, "smartdmt %s - SMART Device Monitoring Terminal\n", Version)
-	fmt.Fprintf(os.Stderr, "(c) Copyright 2026 - desertwitch / License: MIT License\n\n")
+	fmt.Fprintf(os.Stderr, "https://github.com/desertwitch/smartdmt\n\n")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
