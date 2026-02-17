@@ -11,7 +11,7 @@ before:
 
 builds:
   - id: smartdmt
-    main: .
+    main: ./cmd/smartdmt
     binary: smartdmt
     env:
       - CGO_ENABLED=0

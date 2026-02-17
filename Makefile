@@ -1,7 +1,7 @@
 # Makefile
 
 BINARY = smartdmt
-SRC_DIR = .
+SRC_DIR = ./cmd/smartdmt
 
 VERSION := $(shell \
   tag=$$(git describe --tags --exact-match 2>/dev/null); \
