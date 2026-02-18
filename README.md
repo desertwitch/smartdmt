@@ -13,7 +13,7 @@
 <img src="assets/screenshot.gif"><br>
 
 `smartdmt` is a small utility that provides a simple terminal user interface
-(TUI) for inspecting your connected block devices' SMART information. It was
+(TUI) for inspecting your connected block devices SMART information. It was
 developed primarily as a companion application to
 [ShredOS](https://github.com/PartialVolume/shredos.x86_64), so that such
 information can be observed during disk wiping. However, the utility also
@@ -23,12 +23,22 @@ The TUI acts as a visual wrapper, calling `lsblk` and `smartctl` under the hood
 to provide a side-by-side view of all block devices and their SMART information.
 The data is automatically refreshed and basic filtering is possible.
 
-
 ### Installation
 
 To build from source, a `Makefile` is included with the project's source code.
 Running `make all` will compile the application and pull in any necessary
 dependencies. `make check` runs the test suite and static analysis tools.
+
+For convenience, precompiled static binaries for common architectures are
+released through GitHub. These can be installed into `/usr/bin/` or respective
+system locations; ensure they are executable by running `chmod +x` before use.
+
+> All builds from source are designed to generate [reproducible builds](https://reproducible-builds.org/),
+> meaning that they should compile as byte-identical to the respective released binaries and also have the
+> exact same checksums upon integrity verification.
+
+#### Building dependencies:
+- Go version 1.24.2 or higher
 
 #### Runtime dependencies:
 - `lsblk` (as part of `util-linux` package)
@@ -39,6 +49,12 @@ dependencies. `make check` runs the test suite and static analysis tools.
 git clone https://github.com/desertwitch/smartdmt.git
 cd smartdmt
 make all
+```
+
+#### Running a built executable:
+
+```
+./smartdmt
 ```
 
 ## License

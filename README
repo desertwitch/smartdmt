@@ -1,0 +1,18 @@
+smartdmt is a small utility that provides a simple terminal user interface (TUI)
+for inspecting your connected block devices SMART information. It was developed
+primarily as a companion application to ShredOS, so that such information can be
+observed during disk wiping. The utility also functions as a standalone program.
+
+The TUI acts as a visual wrapper, calling "lsblk" and "smartctl" under the hood
+to provide a side-by-side view of all block devices and their SMART information.
+The data is automatically refreshed and basic filtering is possible.
+
+https://github.com/desertwitch/smartdmt
+
+For convenience, precompiled static binaries for common architectures are
+released through GitHub. These can be installed into "/usr/bin/" or respective
+system locations; ensure they are executable by running "chmod +x" before use.
+
+Runtime dependencies:
+- lsblk (as part of "util-linux" package)
+- smartctl (as part of "smartmontools" package)
