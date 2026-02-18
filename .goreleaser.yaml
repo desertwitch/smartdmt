@@ -25,11 +25,8 @@ builds:
       - -buildid=
     goos:
       - linux
-      - darwin
     goarch:
     - amd64
-    - arm
-    - arm64
     - 386
 
 source:
