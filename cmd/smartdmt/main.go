@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ var (
 var _ list.Item = (*Disk)(nil)
 
 type Disk struct {
-	Name   string `json:"name"`
+	Name   string `json:"-"`
 	Path   string `json:"path"`
 	Model  string `json:"model"`
 	Serial string `json:"serial"`
@@ -61,6 +62,11 @@ type (
 		Blockdevices []Disk `json:"blockdevices"`
 	}
 
+	smartctlIdentOutput struct {
+		ModelName    string `json:"model_name"`
+		SerialNumber string `json:"serial_number"`
+	}
+
 	model struct {
 		currentDisk string // displayed
 		loadingDisk string // in-flight
@@ -69,7 +75,8 @@ type (
 		smartData  string
 		smartError error
 
-		lastReload time.Time
+		disksLoaded bool
+		lastReload  time.Time
 
 		width  int
 		height int
@@ -122,7 +129,7 @@ func (m model) Init() tea.Cmd {
 
 func loadDisks(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "lsblk", "-d", "-o", "NAME,PATH,MODEL,SERIAL", "-n", "--json")
+		cmd := exec.CommandContext(ctx, "lsblk", "-d", "-o", "PATH,MODEL,SERIAL", "-n", "--json")
 		output, err := cmd.Output()
 		if err != nil {
 			return disksLoadedMsg([]Disk{})
@@ -135,12 +142,20 @@ func loadDisks(ctx context.Context) tea.Cmd {
 
 		var disks []Disk
 		for _, d := range data.Blockdevices {
-			if strings.Contains(d.Path, "loop") || strings.Contains(d.Path, "ram") {
+			if d.Path == "" || strings.Contains(d.Path, "loop") || strings.Contains(d.Path, "ram") {
 				continue
 			}
 
-			if d.Name == "" && d.Path != "" {
-				d.Name = strings.TrimPrefix(d.Path, "/dev/")
+			d.Name = filepath.Base(d.Path)
+
+			// Prefer smartctl model/serial to lsblk, if available.
+			if ident, err := smartctlIdent(ctx, d.Path); err == nil {
+				if ident.ModelName != "" {
+					d.Model = ident.ModelName
+				}
+				if ident.SerialNumber != "" {
+					d.Serial = ident.SerialNumber
+				}
 			}
 
 			disks = append(disks, d)
@@ -148,6 +163,18 @@ func loadDisks(ctx context.Context) tea.Cmd {
 
 		return disksLoadedMsg(disks)
 	}
+}
+
+func smartctlIdent(ctx context.Context, diskPath string) (smartctlIdentOutput, error) {
+	cmd := exec.CommandContext(ctx, "smartctl", "-i", "--json", diskPath)
+	output, _ := cmd.Output()
+
+	var ident smartctlIdentOutput
+	if err := json.Unmarshal(output, &ident); err != nil {
+		return smartctlIdentOutput{}, err //nolint:wrapcheck
+	}
+
+	return ident, nil
 }
 
 func loadSmartData(ctx context.Context, diskPath string, tableOnly bool) tea.Cmd {
@@ -260,6 +287,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		}
 
 	case disksLoadedMsg:
+		m.disksLoaded = true
+
 		// Filtering is reset on list update, so skip when filtered.
 		if m.list.FilterState() != list.Unfiltered {
 			break
@@ -363,7 +392,13 @@ func (m model) View() string {
 		Render(titleStyle.Render(fmt.Sprintf(" smartdmt %s - SMART Device Monitoring Terminal", Version)))
 
 	// Left panel - Device list
-	leftContent := m.list.View()
+	var leftContent string
+	if !m.disksLoaded {
+		leftContent = helpStyle.Render(" Scanning devices...")
+	} else {
+		leftContent = m.list.View()
+	}
+
 	leftPanel := panelStyle.
 		Width(d.leftColWidth).
 		Height(d.panelInnerHeight).
@@ -378,8 +413,6 @@ func (m model) View() string {
 		}
 		rightContent.WriteString(titleStyle.Render(fmt.Sprintf(" %s [%s]\n Model: %s • Serial: %s",
 			disk.Path, mode, truncate(disk.Model, 40), truncate(disk.Serial, 20))) + "\n\n")
-	} else {
-		rightContent.WriteString(titleStyle.Render(" No device is selected.") + "\n\n")
 	}
 
 	if m.loadingDisk != "" && m.currentDisk != m.loadingDisk {
