@@ -130,10 +130,7 @@ func (m model) Init() tea.Cmd {
 func loadDisks(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
 		cmd := exec.CommandContext(ctx, "lsblk", "-d", "-o", "PATH,MODEL,SERIAL", "-n", "--json")
-		output, err := cmd.Output()
-		if err != nil {
-			return disksLoadedMsg([]Disk{})
-		}
+		output, _ := cmd.Output()
 
 		var data lsblkOutput
 		if err := json.Unmarshal(output, &data); err != nil {
