@@ -21,7 +21,6 @@ functions as a standalone program.
 
 The TUI acts as a visual wrapper, calling `lsblk` and `smartctl` under the hood
 to provide a side-by-side view of all block devices and their SMART information.
-The data is automatically refreshed and basic filtering is possible.
 
 ### Installation
 
