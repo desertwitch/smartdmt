@@ -8,13 +8,13 @@ functions as a standalone program.
 
 The TUI acts as a visual wrapper, calling lsblk and smartctl under the hood to
 provide a side-by-side view of all block devices and their SMART information.
-The data is automatically refreshed and basic filtering is possible.
 */
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,7 +44,7 @@ var (
 			Foreground(lipgloss.Color("241"))
 )
 
-var _ list.Item = (*Disk)(nil)
+var _ list.Item = Disk{}
 
 type Disk struct {
 	Name   string `json:"-"`
@@ -67,13 +67,17 @@ type (
 		SerialNumber string `json:"serial_number"`
 	}
 
-	model struct {
-		currentDisk string // displayed
-		loadingDisk string // in-flight
+	request struct {
+		path      string
+		tableOnly bool
+	}
 
-		tableOnly  bool
-		smartData  string
-		smartError error
+	model struct {
+		shown   request // displayed
+		loading request // in-flight
+
+		tableOnly bool
+		smartData string
 
 		disksLoaded bool
 		lastReload  time.Time
@@ -87,14 +91,12 @@ type (
 		ctx      context.Context //nolint:containedctx
 	}
 
-	tickMsg        time.Time
 	disksLoadedMsg []Disk
 
 	smartDataMsg struct {
-		diskPath  string
-		data      string
-		err       error
-		tableOnly bool
+		req  request
+		data string
+		err  error
 	}
 )
 
@@ -121,16 +123,17 @@ func initialModel(ctx context.Context) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		loadDisks(m.ctx),
-		tickCmd(),
-	)
+	return loadDisks(m.ctx)
 }
 
 func loadDisks(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "lsblk", "-d", "-o", "PATH,MODEL,SERIAL", "-n", "--json")
+		lsblkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(lsblkCtx, "lsblk", "-d", "-o", "PATH,MODEL,SERIAL", "-n", "--json")
 		output, _ := cmd.Output()
+		cancel()
 
 		var data lsblkOutput
 		if err := json.Unmarshal(output, &data); err != nil {
@@ -163,6 +166,9 @@ func loadDisks(ctx context.Context) tea.Cmd {
 }
 
 func smartctlIdent(ctx context.Context, diskPath string) (smartctlIdentOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "smartctl", "-i", "--json", diskPath)
 	output, _ := cmd.Output()
 
@@ -174,29 +180,25 @@ func smartctlIdent(ctx context.Context, diskPath string) (smartctlIdentOutput, e
 	return ident, nil
 }
 
-func loadSmartData(ctx context.Context, diskPath string, tableOnly bool) tea.Cmd {
+func loadSmartData(ctx context.Context, req request) tea.Cmd {
 	return func() tea.Msg {
 		flag := "-x"
-		if tableOnly {
+		if req.tableOnly {
 			flag = "-A"
 		}
 
-		cmd := exec.CommandContext(ctx, "smartctl", flag, diskPath)
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "smartctl", flag, req.path) //nolint:gosec
 		output, err := cmd.CombinedOutput()
 
 		return smartDataMsg{
-			diskPath:  diskPath,
-			data:      string(output),
-			err:       err,
-			tableOnly: tableOnly,
+			req:  req,
+			data: string(output),
+			err:  err,
 		}
 	}
-}
-
-func tickCmd() tea.Cmd {
-	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
 }
 
 type dimensions struct {
@@ -247,12 +249,7 @@ func calcDimensions(width, height int) dimensions {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 	var cmds []tea.Cmd
 	var listCmd, vpCmd tea.Cmd
-	var selectedDisk *Disk
-	var dispatchReload bool
-
-	if disk := m.selectedDisk(); disk != nil {
-		selectedDisk = disk
-	}
+	var force bool
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -261,12 +258,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 			return m, tea.Quit
 
 		case "r", "R":
-			dispatchReload = true
+			cmds = append(cmds, loadDisks(m.ctx))
+			force = true
 
 		case "t", "T":
 			m.tableOnly = !m.tableOnly
-			m.currentDisk = "" // full reload
-			dispatchReload = true
 		}
 
 	case tea.WindowSizeMsg:
@@ -278,10 +274,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		m.viewport.Width = d.viewportWidth
 		m.viewport.Height = d.viewportHeight
 
-		if !m.ready {
-			m.ready = true
-			dispatchReload = true
-		}
+		m.ready = true
 
 	case disksLoadedMsg:
 		m.disksLoaded = true
@@ -289,6 +282,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		// Filtering is reset on list update, so skip when filtered.
 		if m.list.FilterState() != list.Unfiltered {
 			break
+		}
+
+		// Save the currently selected disk
+		var selectedPath string
+		if disk, ok := m.selectedDisk(); ok {
+			selectedPath = disk.Path
 		}
 
 		// Convert to list items
@@ -299,9 +298,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		m.list.SetItems(items)
 
 		// Try to keep the same disk selected
-		if selectedDisk != nil && selectedDisk.Path != "" {
+		if selectedPath != "" {
 			for i, disk := range msg {
-				if disk.Path == selectedDisk.Path {
+				if disk.Path == selectedPath {
 					m.list.Select(i)
 
 					break
@@ -310,36 +309,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		}
 
 	case smartDataMsg:
-		if selectedDisk != nil && msg.diskPath == selectedDisk.Path && msg.tableOnly == m.tableOnly {
-			isReload := m.currentDisk == msg.diskPath
-			savedOffset := m.viewport.YOffset
-
-			m.smartData = msg.data
-			m.smartError = msg.err
-			m.loadingDisk = ""
-			m.currentDisk = msg.diskPath
-
-			// Wrap content around viewport width
-			smartData := lipgloss.NewStyle().
-				MarginLeft(1).
-				Width(m.viewport.Width).
-				Render(strings.TrimSuffix(m.smartData, "\n"))
-			m.viewport.SetContent(smartData)
-
-			// Preserve scroll position on reload, reset on disk change
-			if isReload {
-				m.viewport.SetYOffset(savedOffset)
-			} else {
-				m.viewport.GotoTop()
-			}
-
-			m.lastReload = time.Now()
+		// Anything that isn't the request we're waiting on is stale.
+		if msg.req != m.loading {
+			break
 		}
 
-	case tickMsg:
-		cmds = append(cmds, tickCmd())
-		cmds = append(cmds, loadDisks(m.ctx))
-		dispatchReload = true
+		// Same disk and same view mode: keep the scroll position.
+		isReload := msg.req == m.shown
+		savedOffset := m.viewport.YOffset
+
+		m.smartData = msg.data
+		if errors.Is(msg.err, context.DeadlineExceeded) {
+			m.smartData = "Timed out; device may be unresponsive."
+		}
+		m.loading = request{}
+		m.shown = msg.req
+
+		// Wrap content around viewport width
+		smartData := lipgloss.NewStyle().
+			MarginLeft(1).
+			Width(m.viewport.Width).
+			Render(strings.TrimSuffix(m.smartData, "\n"))
+		m.viewport.SetContent(smartData)
+
+		// Preserve scroll position on reload, reset on disk change
+		if isReload {
+			m.viewport.SetYOffset(savedOffset)
+		} else {
+			m.viewport.GotoTop()
+		}
+
+		m.lastReload = time.Now()
 	}
 
 	m.list, listCmd = m.list.Update(msg)
@@ -348,29 +348,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	cmds = append(cmds, vpCmd)
 
-	// Check if the selected disk changed after the list updated
-	var prevPath string
-	if selectedDisk != nil {
-		prevPath = selectedDisk.Path
+	// What the UI should be showing, after the list has had its turn.
+	want := request{tableOnly: m.tableOnly}
+	if disk, ok := m.selectedDisk(); ok {
+		want.path = disk.Path
 	}
 
-	selectedDisk = m.selectedDisk()
-
-	if selectedDisk != nil {
-		if selectedDisk.Path != prevPath && selectedDisk.Path != m.loadingDisk {
-			// Dispatch reload, disk differs and we're not already loading it.
-			dispatchReload = true
-		}
-	} else if m.currentDisk != "" {
+	switch {
+	case want.path == "":
 		// No disk is selected anymore, clear the residual state.
-		m.currentDisk = ""
-		m.smartData = ""
-		m.viewport.SetContent("")
-	}
+		if m.shown.path != "" || m.loading.path != "" {
+			m.shown, m.loading = request{}, request{}
+			m.smartData = ""
+			m.viewport.SetContent("")
+		}
 
-	if dispatchReload && selectedDisk != nil {
-		cmds = append(cmds, loadSmartData(m.ctx, selectedDisk.Path, m.tableOnly))
-		m.loadingDisk = selectedDisk.Path
+	case force || (want != m.shown && want != m.loading):
+		cmds = append(cmds, loadSmartData(m.ctx, want))
+		m.loading = want
 	}
 
 	return m, tea.Batch(cmds...)
@@ -403,7 +398,7 @@ func (m model) View() string {
 
 	// Right panel content - Smart data
 	var rightContent strings.Builder
-	if disk := m.selectedDisk(); disk != nil {
+	if disk, ok := m.selectedDisk(); ok {
 		mode := "Full View"
 		if m.tableOnly {
 			mode = "Table View"
@@ -412,7 +407,8 @@ func (m model) View() string {
 			disk.Path, mode, truncate(disk.Model, 40), truncate(disk.Serial, 20))) + "\n\n")
 	}
 
-	if m.loadingDisk != "" && m.currentDisk != m.loadingDisk {
+	// In-flight for something we aren't already displaying.
+	if m.loading.path != "" && m.loading != m.shown {
 		rightContent.WriteString(" Loading...")
 	} else {
 		rightContent.WriteString(m.viewport.View())
@@ -435,14 +431,14 @@ func (m model) View() string {
 	return header + "\n" + content + "\n" + help
 }
 
-func (m model) selectedDisk() *Disk {
+func (m model) selectedDisk() (Disk, bool) {
 	if item := m.list.SelectedItem(); item != nil {
 		if disk, ok := item.(Disk); ok {
-			return &disk
+			return disk, true
 		}
 	}
 
-	return nil
+	return Disk{}, false
 }
 
 func truncate(s string, maxLen int) string {
@@ -473,29 +469,23 @@ func main() {
 	fmt.Fprintf(os.Stderr, "smartdmt %s - SMART Device Monitoring Terminal\n", Version)
 	fmt.Fprintf(os.Stderr, "https://github.com/desertwitch/smartdmt\n\n")
 
+	for _, bin := range []string{"lsblk", "smartctl"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s not available: %v\n", bin, err)
+			exitCode = 1
+
+			return
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	if err := exec.CommandContext(ctx, "lsblk", "-d", "-o", "NAME,PATH,MODEL,SERIAL", "-n", "--json").Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: lsblk not available or failed: %v\n", err)
-		exitCode = 1
-
-		return
-	}
-
-	if err := exec.CommandContext(ctx, "smartctl", "--version").Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: smartctl not available: %v\n", err)
-		exitCode = 1
-
-		return
-	}
 
 	p := tea.NewProgram(
 		initialModel(ctx),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 		tea.WithContext(ctx),
-		tea.WithoutCatchPanics(),
 	)
 
 	if _, err := p.Run(); err != nil {
