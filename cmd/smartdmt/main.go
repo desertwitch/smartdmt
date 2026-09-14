@@ -253,8 +253,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		if m.list.FilterState() == list.Filtering {
+			break // the list owns the keyboard
+		}
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q":
 			return m, tea.Quit
 
 		case "r", "R":
@@ -269,10 +275,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		m.width = msg.Width
 		m.height = msg.Height
 
+		savedOffset := m.viewport.YOffset
+
 		d := calcDimensions(m.width, m.height)
 		m.list.SetSize(d.listWidth, d.listHeight)
 		m.viewport.Width = d.viewportWidth
 		m.viewport.Height = d.viewportHeight
+
+		// Wrap content around viewport width
+		m.viewport.SetContent(m.renderedSmartData())
+		m.viewport.SetYOffset(savedOffset)
 
 		m.ready = true
 
@@ -326,11 +338,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 		m.shown = msg.req
 
 		// Wrap content around viewport width
-		smartData := lipgloss.NewStyle().
-			MarginLeft(1).
-			Width(m.viewport.Width).
-			Render(strings.TrimSuffix(m.smartData, "\n"))
-		m.viewport.SetContent(smartData)
+		m.viewport.SetContent(m.renderedSmartData())
 
 		// Preserve scroll position on reload, reset on disk change
 		if isReload {
@@ -345,8 +353,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 	m.list, listCmd = m.list.Update(msg)
 	cmds = append(cmds, listCmd)
 
-	m.viewport, vpCmd = m.viewport.Update(msg)
-	cmds = append(cmds, vpCmd)
+	_, isKey := msg.(tea.KeyMsg)
+	if !isKey || m.list.FilterState() != list.Filtering {
+		m.viewport, vpCmd = m.viewport.Update(msg)
+		cmds = append(cmds, vpCmd)
+	}
 
 	// What the UI should be showing, after the list has had its turn.
 	want := request{tableOnly: m.tableOnly}
@@ -362,6 +373,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn
 			m.smartData = ""
 			m.viewport.SetContent("")
 		}
+
+	case m.list.FilterState() == list.Filtering:
+		// Selection is still moving; wait for the filter to settle
 
 	case force || (want != m.shown && want != m.loading):
 		cmds = append(cmds, loadSmartData(m.ctx, want))
@@ -429,6 +443,13 @@ func (m model) View() string {
 	}
 
 	return header + "\n" + content + "\n" + help
+}
+
+func (m model) renderedSmartData() string {
+	return lipgloss.NewStyle().
+		MarginLeft(1).
+		Width(m.viewport.Width).
+		Render(strings.TrimSuffix(m.smartData, "\n"))
 }
 
 func (m model) selectedDisk() (Disk, bool) {
